@@ -615,7 +615,7 @@ function pull(server::Server, remote::String, loc::String)
                 error("$stderr")
             end
         else
-            write(loc, read(server, remote))
+            write(path, read(server, remote))
         end
             
     end
