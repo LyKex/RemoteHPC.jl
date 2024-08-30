@@ -1,7 +1,8 @@
 """
     start(s::Server)
 
-Launches the daemon process on  the host [`Server`](@ref) `s`.
+Launches the daemon process on the host [`Server`](@ref) `s`. Note s may be modified, so always
+use s = start(s).
 """
 function start(s::Server; verbosity=0)
 
@@ -10,7 +11,8 @@ function start(s::Server; verbosity=0)
     steps = ["Verifying that local server is running",
              "Verifying that the server isn't already alive",
              "Starting server",
-             "Waiting for server connection"]
+             "Waiting for server connection",
+             "Finishing up"]
     
     StepSpinner(title, steps) do spinner
         
@@ -22,9 +24,10 @@ function start(s::Server; verbosity=0)
                 finish!(spinner, ErrorException("Couldn't start local server."))
             end
         end
+
         push!(spinner, "local server running")
 
-        next!(spinner)
+        next!(spinner) # step 2
         
         alive = isalive(s) || (!islocal(s) && get(JSON3.read(check_connections(names=[s.name]).body), Symbol(s.name), false))
         if alive
@@ -33,7 +36,7 @@ function start(s::Server; verbosity=0)
             return
         end
 
-        next!(spinner)
+        next!(spinner) # step 3
         
         hostname  = gethostname(s)
         conf_path = config_path(s)
@@ -83,12 +86,13 @@ function start(s::Server; verbosity=0)
             return curtime
         end
         firstime = checktime()
+        @debug "server startup: last modified time of config file $(checktime())"
 
         p = "$(conf_path)/$hostname/logs/errors.log"
         scrpt = "using RemoteHPC; RemoteHPC.julia_main(verbose=$(verbosity))"
         
         if s.domain != "localhost"
-            julia_cmd = replace("""$(s.julia_exec) --project=$(conf_path) --startup-file=no -t 10 -e "using RemoteHPC; RemoteHPC.julia_main(verbose=$(verbosity))" &> $p""",
+            julia_cmd = replace("""$(s.julia_exec) --project=$(conf_path) --startup-file=no -t 10 -e "using RemoteHPC; RemoteHPC.julia_main(verbose=$(verbosity))" 2&>1 $p""",
                                 "'" => "")
             if Sys.which("ssh") === nothing
                 OpenSSH_jll.ssh() do ssh_exec
@@ -108,6 +112,7 @@ function start(s::Server; verbosity=0)
         push!(spinner, "Waiting for server bootup")
         
         while checktime() <= firstime && retries < 60
+            @debug "server startup: last modified time of config file $(checktime())"
             retries += 1
             sleep(1)
         end
@@ -116,13 +121,15 @@ function start(s::Server; verbosity=0)
             finish!(spinner, ErrorException("Something went wrong starting the server."))
         end
         
-        next!(spinner)
+        next!(spinner) #step 4
         
         cfg = load_config(s)
         s.port = cfg.port
         s.uuid = cfg.uuid
         
         save(s)
+
+        next!(spinner) #step 5
 
         retries = 0
         
@@ -136,6 +143,7 @@ function start(s::Server; verbosity=0)
         else
             check_connections(; names=[s.name])
             while !isalive(s) && retries < 60
+                retries += 1
                 sleep(0.1)
             end
         end
@@ -209,6 +217,7 @@ function check_connections(; names=[])
         return HTTP.put(LOCAL_SERVER[], URI(path="/server/check_connections"), timeout = 60)
     else
         for n in names
+            # put will create check_connections on the server if it doesn't exist
             return HTTP.put(LOCAL_SERVER[], URI(path="/server/check_connections/$n"), timeout = 60)
         end
     end

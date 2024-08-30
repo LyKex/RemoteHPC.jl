@@ -571,17 +571,28 @@ function destroy_tunnel(s)
     end
 end
 
+"""
+    construct_tunnel
+
+    Find free port and open ssh local port forwarding on that port.
+    See the trick in `find_free_port` in RemoteREPL. 
+    https://github.com/JuliaWeb/RemoteREPL.jl/blob/main/src/tunnels.jl
+   
+"""
+
 function construct_tunnel(s, remote_port)
     if Sys.which("ssh") === nothing
         OpenSSH_jll.ssh() do ssh_exec
             port, serv = listenany(Sockets.localhost, 0)
             close(serv)
+            @debug "Connecting SSH tunnel with OpenSSH_jil to remote $(ssh_string(s)) on local port $port"
             run(Cmd(`$ssh_exec -o ExitOnForwardFailure=yes -o ServerAliveInterval=60 -N -L $port:localhost:$remote_port $(ssh_string(s))`); wait=false)
             return port
         end
     else
         port, serv = listenany(Sockets.localhost, 0)
         close(serv)
+        @debug "Connecting SSH tunnel with ssh to remote $(ssh_string(s)) on local port $port"
         cmd = Cmd(`ssh -o ExitOnForwardFailure=yes -o ServerAliveInterval=60 -N -L $port:localhost:$remote_port $(ssh_string(s))`)
         run(cmd; wait=false)
         return port

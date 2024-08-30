@@ -263,6 +263,8 @@ function AuthHandler(handler, user_uuid::UUID)
     return function f(req)
         if HTTP.hasheader(req, "USER-UUID")
             uuid = HTTP.header(req, "USER-UUID")
+
+            @debug "uuid of request: $uuid, uuid of server: $user_uuid"
             if UUID(uuid) == user_uuid
                 t = ThreadPools.spawnbg() do 
                     return handler(req)
