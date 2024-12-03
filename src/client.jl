@@ -92,7 +92,7 @@ function start(s::Server; verbosity=0)
         scrpt = "using RemoteHPC; RemoteHPC.julia_main(verbose=$(verbosity))"
         
         if s.domain != "localhost"
-            julia_cmd = replace("""$(s.julia_exec) --project=$(conf_path) --startup-file=no -t 10 -e "using RemoteHPC; RemoteHPC.julia_main(verbose=$(verbosity))" 2&>1 $p""",
+            julia_cmd = replace("""export OPENBLAS_NUM_THREADS=1; $(s.julia_exec) --project=$(conf_path) --startup-file=no -t 10 -e "using RemoteHPC; RemoteHPC.julia_main(verbose=$(verbosity))" 2&>1 $p""",
                                 "'" => "")
             if Sys.which("ssh") === nothing
                 OpenSSH_jll.ssh() do ssh_exec
