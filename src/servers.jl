@@ -450,6 +450,16 @@ function Base.rm(s::Server, p::String)
         return nothing
     end
 end
+
+function Base.mv(s::Server, src::AbstractString, dst::AbstractString; force::Bool=true)
+    if islocal(s)
+        mv(src, dst; force=force)
+    else
+        HTTP.post(s, URI(path="/mv/"), query=Dict("src"=>src, "dst"=>dst, "force"=>force))
+        return dst
+    end
+end
+
 function Base.read(s::Server, path::String, type = nothing)
     if islocal(s)
         return type === nothing ? read(path) : read(path, type)
@@ -459,6 +469,7 @@ function Base.read(s::Server, path::String, type = nothing)
         return type === nothing ? t : type(t)
     end
 end
+
 function Base.write(s::Server, path::String, v)
     if islocal(s)
         write(path, v)
@@ -467,14 +478,17 @@ function Base.write(s::Server, path::String, v)
         return JSON3.read(resp.body, Int)
     end
 end
+
 function Base.mkpath(s::Server, dir)
     HTTP.post(s, URI(path="/mkpath/", query=Dict("path" => dir)))
     return dir
 end
+
 function Base.cp(s::Server, src, dst)
     HTTP.post(s, URI(path="/cp/"), (src, dst))
     return dst
 end
+
 
 parse_config(config) = JSON3.read(config, Server)
 read_config(config_file) = parse_config(read(config_file, String))
