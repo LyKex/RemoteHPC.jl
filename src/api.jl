@@ -36,12 +36,7 @@ function server_config(req, s::ServerData)
 end
 
 function setup_core_api!(s::ServerData)
-    @put  "/server/kill"  req -> (s.stop = true)
-    @get  "/info/version" req -> get_version()
-    @get  "/isalive/"     req -> true
-    @get  "/isalive/*"    req -> (n = splitpath(req.target)[end]; haskey(s.connections, n) && s.connections[n])
-    @get  "/api/**"       execute_function
-    
+    # POSIX-like commands
     @get  "/ispath/"     req -> (p = queryparams(req)["path"]; ispath(p))
     @get  "/read/"       req -> (p = queryparams(req)["path"]; read(p))
     @post "/write/"      req -> (p = queryparams(req)["path"]; write(p, req.body))
@@ -55,11 +50,30 @@ function setup_core_api!(s::ServerData)
     @post "/symlink/"    req -> symlink(JSON3.read(req.body, Vector{String})...)
     @post "/cp/"         req -> cp(JSON3.read(req.body, Tuple{String, String})...; force=true)
     
-    @post "/server/config/*"  req -> server_config!(req, s)
-    @get  "/server/config/**" req -> server_config(req, s)
+    # server main loop will run while !s.stop
+    # see main_loop in runtime.jl
+    # client side function kill(server)
+    @put  "/server/kill"  req -> (s.stop = true)
+    # server version, client side function version(server)
+    @get  "/info/version" req -> get_version()
+    # is the current server alive
+    @get  "/isalive/"     req -> true
+    # is some other server alive
+    @get  "/isalive/*"    req -> (n = splitpath(req.target)[end]; haskey(s.connections, n) && s.connections[n])
+    # return local server by name
+    # server is local if server.name == hostname
     @get  "/server/config"    req -> local_server()
+    # check the connections of servers through /isalive/
     @put  "/server/check_connections"   req -> check_connections!(s, get(queryparams(req), "verify_tunnels", false))
+    # same as above but will rebuild the ssh tunnel first
     @put  "/server/check_connections/*" req -> check_connections!(s, get(queryparams(req), "verify_tunnels", true); names=[splitpath(req.target)[end]])
+
+    # i don't think the following are used anywhere...
+    @get  "/api/**"       execute_function
+    # set config
+    @post "/server/config/*"  req -> server_config!(req, s)
+    # get config
+    @get  "/server/config/**" req -> server_config(req, s)
 end
 
 function submit_job(req, queue::Queue, channel)
@@ -199,12 +213,22 @@ function priority!(req::HTTP.Request, queue::Queue)
 end
 
 function setup_job_api!(s::ServerData)
+    # write job.sh and .remotehpcinfo
+    # note that to write actual calculation inputs this function need to be override
+    # also add job into s.queue, the directory will serve as job id
     @post "/job/"         req -> save_job(req, s.queue, s.server.scheduler)
+    # submit job only if the job is in queue
     @put  "/job/"         req -> submit_job(req, s.queue, s.submit_channel)
+    # update job priority
     @put  "/job/priority" req -> priority!(req, s.queue)
+    # return job info for backward compatility
+    # see line 233 at client.jl
     @get  "/job/"         req -> get_job(req, s.queue)
+    # query jobs based on JobState
     @get  "/jobs/state"   req -> get_jobs(JSON3.read(req.body, JobState), s.queue)
+    # query jobs based on Job directory
     @get  "/jobs/fuzzy"   req -> get_jobs(JSON3.read(req.body, String), s.queue)
+    # abort job, will cancel job from internal queue and also the external scheduler eg slurm
     @post "/abort/"       req -> abort(req, s.queue, s.server.scheduler)
 end
 
@@ -233,6 +257,8 @@ function database_rm(req)
 end
 
 function setup_database_api!()
+    # manage central database stored as json files in .julia/config/RemoteHPC
+    # see database.jl
     @get  "/storage/" req -> load(req)
     @post "/storage/" req -> save(req)
     @put  "/storage/" req -> database_rm(req)
