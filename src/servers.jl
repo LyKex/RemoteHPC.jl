@@ -495,6 +495,10 @@ read_config(config_file) = parse_config(read(config_file, String))
 
 config_path(s::Server, p...) = joinpath(depot_path(s), "config", "RemoteHPC", p...)
 
+"""
+Load configuration on remote server regardless of if that server is alive.
+Will excute through ssh.
+"""
 function load_config(username, domain, conf_path)
     hostname = gethostname(username, domain)
     if domain == "localhost"

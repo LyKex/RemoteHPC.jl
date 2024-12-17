@@ -147,6 +147,7 @@ function main_loop(s::ServerData)
         catch e
             log_error(e, logtype = RuntimeLog)
         end
+        # TODO when will this file be created?
         if ispath(config_path("self_destruct"))
             @debug "self_destruct found, self destructing..."
             exit()
@@ -344,6 +345,7 @@ end
 function check_connections!(server_data::ServerData, args...; kwargs...)
     all_servers = load(Server(""))
     
+    # delete unconfigured servers
     for k in filter(x-> !(x in all_servers), keys(server_data.connections))
         delete!(server_data.connections, k)
     end
@@ -359,7 +361,74 @@ function check_connections!(server_data::ServerData, args...; kwargs...)
     
     return conn
 end
+
+
+"""
+Check if the ssh port forwarding tunnel to server s is still alive.
+"""
+function check_tunnel(s::Server)
+    check_tunnel(s.port)
+end
+
+function check_tunnel(port::Int64)
+    try
+        r = run(Cmd(`nc -z localhost $port`))
+        return iszero(r.exitcode)
+    catch
+        return false
+    end
+end
+
+"""
+Check the status of ssh tunnel forwarding to all configured servers
+"""
+function check_tunnels()
+    all_servers = load(Server(""))
+    host = gethostname()
+   
+    status = Dict{String, Any}()
+    for sn in all_servers
+        # skip local server
+        if sn == host
+            continue
+        end
     
+        server = Server(sn)
+        res = check_tunnel(server.port)
+        status[sn] = res
+    end
+    return status
+end
+
+"""
+Rebuild dead ssh tunnels based on local ports stored in the config and remote ports stored
+on servers. The status of the tunnels are decieded by `check_tunnels()`
+This is necessary since ssh tunnels are frequently destroyed. 
+"""
+function maybe_revive_tunnels()
+    status = check_tunnels()
+    # TODO will maintain ssh tunnel for all configured servers
+    # this can block the port even when the server is not running on the remote
+    # machine, alternatively we can connect ssh tunnel to only the "intended"
+    # servers, which may need additional configurations.
+    # TODO check autossh https://github.com/Autossh/autossh
+    for sn in keys(status)
+        # skip established tunnels
+        if status[sn]
+            continue
+        end
+        @debug "Attempt to rebuild tunnel to server $sn." logtype=RuntimeLog
+        s = Server(sn)
+        config = load_config(s)
+        cmd = Cmd(`ssh -o ExitOnForwardFailure=yes -o ServerAliveInterval=60 -N -L $(s.port):localhost:$(config.port) $(ssh_string(s))`)
+        try
+            process = run(cmd; wait=false)
+        catch e
+            log_error(e)
+        end
+    end
+end
+
 function julia_main(;verbose=0, kwargs...)::Cint
     logger = TimestampLogger(TeeLogger(HTTPLogger(),
                                    NotHTTPLogger(TeeLogger(RESTLogger(),
@@ -380,22 +449,25 @@ function julia_main(;verbose=0, kwargs...)::Cint
                 setup_job_api!(server_data)
                 setup_database_api!()
 
+                # ssh portforwarding may crash
+                # this periodically checks the ssh tunnels and revive them
                 connection_task = Threads.@spawn @stoppable server_data.stop begin
-                    @debug "Checking Connections" logtype=RuntimeLog
+                    @debug "Checking Tunnels" logtype=RuntimeLog
                     try
-                        check_connections!(server_data, false)
+                        t = time()
                         while true
-                            t = time()
-                            check_connections!(server_data, false)
-                            sleep_t = 5 - (time() - t)
-                            if sleep_t > 0
-                                sleep(sleep_t)
+                            if time() - t > server_data.sleep_time
+                                t = time()
+                                maybe_revive_tunnels()
+                            else
+                                sleep(10)
                             end
                         end
                     catch e
                         log_error(e)
                     end
                 end
+
                 
                 @debug "Starting main loop" logtype=RuntimeLog
 
@@ -414,7 +486,7 @@ function julia_main(;verbose=0, kwargs...)::Cint
                 @debug "Shutting down server"
                 terminate()
                 fetch(t)
-                fetch(connection_task)
+                # fetch(connection_task)
                 return 0
             catch e
                 log_error(e)

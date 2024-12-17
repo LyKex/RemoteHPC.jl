@@ -19,6 +19,7 @@ using InteractiveUtils
 using BinaryTraits
 using DataStructures
 using Oxygen
+using DocStringExtensions
 
 const CONFIG_DIR = occursin("cache", first(Base.DEPOT_PATH)) ?
                    abspath(Base.DEPOT_PATH[2], "config", "RemoteHPC") :
@@ -71,7 +72,7 @@ end
 
 export Server, start, restart, local_server, isalive, load, save, submit, abort, state, configure, priority!, check_connections
 export Calculation, Environment, Exec, HQ, Slurm, Bash
-export exec
+export check_tunnels, exec
 
 
 function __init__()

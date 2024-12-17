@@ -35,6 +35,23 @@ function server_config(req, s::ServerData)
     end
 end
 
+
+"""
+    $(SIGNATURES)
+
+check if remote server is pingable. This checks the tunnel and server status at the same time.
+isalive = tunnel && islistening
+"""
+function _isalive(sn::AbstractString)
+    s  = Server(sn)
+    try
+        resp = HTTP.get(s, URI(path="/isalive/"); connect_timeout=2, retries=2)
+        return resp.status == Int16(200)
+    catch
+        return false
+    end
+end
+
 function setup_core_api!(s::ServerData)
     # POSIX-like commands
     @get  "/ispath/"     req -> (p = queryparams(req)["path"]; ispath(p))
@@ -56,10 +73,10 @@ function setup_core_api!(s::ServerData)
     @put  "/server/kill"  req -> (s.stop = true)
     # server version, client side function version(server)
     @get  "/info/version" req -> get_version()
-    # is the current server alive
+    # is the local server alive
     @get  "/isalive/"     req -> true
     # is some other server alive
-    @get  "/isalive/*"    req -> (n = splitpath(req.target)[end]; haskey(s.connections, n) && s.connections[n])
+    @get  "/isalive/*"    req -> (n = splitpath(req.target)[end]; _isalive(n))
     # return local server by name
     # server is local if server.name == hostname
     @get  "/server/config"    req -> local_server()
@@ -146,13 +163,20 @@ end
 function get_jobs(dirfuzzy::AbstractString, queue::Queue)
     jobs = String[]
     for q in (queue.info.full_queue, queue.info.current_queue)
-        for (d, j) in q
+        for (d, _) in q
             if occursin(dirfuzzy, d)
                 push!(jobs, d)
             end
         end
     end
     return jobs
+end
+
+function get_queue(req::HTTP.Request, queue::Queue, scheduler::Scheduler)
+    return 
+        (; current_queue = length(s.queue.info.current_queue),
+        submit_queue = length(s.queue.info.submit_queue),
+        scheduler = scheduler.type)
 end
 
 function save_job(req::HTTP.Request, args...)
@@ -228,6 +252,7 @@ function setup_job_api!(s::ServerData)
     @get  "/jobs/state"   req -> get_jobs(JSON3.read(req.body, JobState), s.queue)
     # query jobs based on Job directory
     @get  "/jobs/fuzzy"   req -> get_jobs(JSON3.read(req.body, String), s.queue)
+    @get  "/jobs/queue"  req -> get_queue(req, s.queue, s.server.scheduler)
     # abort job, will cancel job from internal queue and also the external scheduler eg slurm
     @post "/abort/"       req -> abort(req, s.queue, s.server.scheduler)
 end

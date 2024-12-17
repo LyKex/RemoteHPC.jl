@@ -190,10 +190,10 @@ function update_config(s::Server)
 end
 
 """
-    isalive(s::Server)
+    $(SIGNATURES)
 
-Will try to fetch some data from `s`. If the server is not running this will fail and
-the return is `false`.
+Check if server s is pingable. isalive return true if both the ssh tunnel and remote server
+is working.
 """
 function isalive(s::Server)
     if islocal(s)
@@ -205,12 +205,24 @@ function isalive(s::Server)
             return false
         end
     else
-        if !isalive(LOCAL_SERVER[])
-            error("Local server not running. Use `start(local_server())` first.")
-        end
-        return JSON3.read(HTTP.get(LOCAL_SERVER[], URI(path="/isalive/$(s.name)"); connect_timeout = 2, retries = 2).body, Bool)
+        return JSON3.read(
+            HTTP.get(LOCAL_SERVER[], URI(path="/isalive/$(s.name)"); connect_timeout = 2, retries = 2).body,
+            Bool
+        )
     end
 end
+
+"""
+    $(SIGNATURES)
+
+Check if the port of the ssh tunnel to the server is listening.
+"""
+function islistening(s::Server)
+    cmd = pipeline(pipeline(`echo -e '\x1dclose\x0d'`, `telnet localhost $(s.port)`); stdout=devnull)
+    p = run(cmd)
+    return iszero(p.processes[2].exitcode)
+end
+
 
 function check_connections(; names=[])
     if isempty(names)
@@ -247,6 +259,15 @@ function load(s::Server, state::JobState)
     resp = HTTP.get(s, URI(path="/jobs/state/"), state)
     return JSON3.read(resp.body, Vector{String})
 end
+
+function queue(s::Server)
+    resp = HTTP.get(s, URI(path="/job/queue"))
+    return JSON3.read(resp.body, Vector{String})
+end
+
+running(s::Server) = load(s, Running)
+pending(s::Server) = load(s, Pending)
+failed(s::Server) = load(s, Failed)
 
 function submit(s::Server, dir::AbstractString, priority=DEFAULT_PRIORITY)
     adir = abspath(s, dir)
