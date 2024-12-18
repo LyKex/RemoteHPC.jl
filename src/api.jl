@@ -172,13 +172,6 @@ function get_jobs(dirfuzzy::AbstractString, queue::Queue)
     return jobs
 end
 
-function get_queue(queue::Queue, scheduler::Scheduler)
-    return  (
-        string(length(queue.info.current_queue)),
-        string(length(queue.info.submit_queue)),
-        scheduler.type
-    )
-end
 
 function save_job(req::HTTP.Request, args...)
     return save_job(queryparams(req)["path"],
@@ -253,7 +246,7 @@ function setup_job_api!(s::ServerData)
     @get  "/jobs/state"   req -> get_jobs(JSON3.read(req.body, JobState), s.queue)
     # query jobs based on Job directory
     @get  "/jobs/fuzzy"   req -> get_jobs(JSON3.read(req.body, String), s.queue)
-    @get  "/jobs/queue"  req -> get_queue(s.queue, s.server.scheduler)
+    @get  "/jobs/queue"  req -> queue(s.server.scheduler)
     # abort job, will cancel job from internal queue and also the external scheduler eg slurm
     @post "/abort/"       req -> abort(req, s.queue, s.server.scheduler)
 end

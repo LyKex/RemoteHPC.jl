@@ -260,12 +260,21 @@ function load(s::Server, state::JobState)
     return JSON3.read(resp.body, Vector{String})
 end
 
+"""
+    $(SIGNATURES)
+
+Show queue information on server.
+"""
 function queue(s::Server; io=stdout)
+    sched_type = s.scheduler.type
     resp = HTTP.get(s, URI(path="/jobs/queue"))
-    strings = JSON3.read(resp.body, Vector{String})
-    println(io, "$(strings[3]) scheduler on server $(s.name)")
-    println(io, "Jobs running: $(strings[1])")
-    println(io, "Jobs pending: $(strings[2])")
+    q = JSON3.read(resp.body, Dict{AbstractString, Tuple{Int64, JobState}})
+        
+    pendings = sum([v[2] == JobState(1) for v in values(q)])
+    runnings = sum([v[2] == JobState(2) for v in values(q)])
+    println(io, "$(sched_type) scheduler on server $(s.name)")
+    println(io, "Jobs running: $(runnings)")
+    println(io, "Jobs pending: $(pendings)")
 end
 
 running(s::Server) = load(s, Running)

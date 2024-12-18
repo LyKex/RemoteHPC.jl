@@ -27,7 +27,7 @@ function Base.lock(f::Function, q::Queue)
     end
 end
 
-function Base.fill!(qu::Queue, s::Scheduler, init)
+function Base.fill!(qu::Queue, scheduler::Scheduler, init)
     qfile = config_path("jobs", "queue.json")
     if init
         if ispath(qfile)
@@ -66,7 +66,7 @@ function Base.fill!(qu::Queue, s::Scheduler, init)
         end
     end
     # Here we check whether the scheduler died while the server was running and try to restart and resubmit   
-    if maybe_scheduler_restart(s)
+    if maybe_scheduler_restart(scheduler)
         lock(qu) do q
             for (d, i) in q.current_queue
                 if ispath(joinpath(d, "job.sh"))
@@ -77,13 +77,13 @@ function Base.fill!(qu::Queue, s::Scheduler, init)
             end
         end
     else
-        squeue = queue(s)
+        squeue = queue(scheduler)
         lock(qu) do q
             for (d, i) in q.current_queue
                 if haskey(squeue, d)
                     state = pop!(squeue, d)[2]
                 else
-                    state = jobstate(s, i.id)
+                    state = jobstate(scheduler, i.id)
                 end
                 if in_queue(state)
                     delete!(q.full_queue, d)
