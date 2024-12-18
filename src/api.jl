@@ -172,11 +172,12 @@ function get_jobs(dirfuzzy::AbstractString, queue::Queue)
     return jobs
 end
 
-function get_queue(req::HTTP.Request, queue::Queue, scheduler::Scheduler)
-    return 
-        (; current_queue = length(s.queue.info.current_queue),
-        submit_queue = length(s.queue.info.submit_queue),
-        scheduler = scheduler.type)
+function get_queue(queue::Queue, scheduler::Scheduler)
+    return  (
+        string(length(queue.info.current_queue)),
+        string(length(queue.info.submit_queue)),
+        scheduler.type
+    )
 end
 
 function save_job(req::HTTP.Request, args...)
@@ -239,20 +240,20 @@ end
 function setup_job_api!(s::ServerData)
     # write job.sh and .remotehpcinfo
     # note that to write actual calculation inputs this function need to be override
-    # also add job into s.queue, the directory will serve as job id
+    # also add job into s.queue, the job directory will serve as job id
     @post "/job/"         req -> save_job(req, s.queue, s.server.scheduler)
     # submit job only if the job is in queue
     @put  "/job/"         req -> submit_job(req, s.queue, s.submit_channel)
     # update job priority
     @put  "/job/priority" req -> priority!(req, s.queue)
-    # return job info for backward compatility
-    # see line 233 at client.jl
+    # query job based on job directory
+    # see load(s, dir) in client.jl
     @get  "/job/"         req -> get_job(req, s.queue)
     # query jobs based on JobState
     @get  "/jobs/state"   req -> get_jobs(JSON3.read(req.body, JobState), s.queue)
     # query jobs based on Job directory
     @get  "/jobs/fuzzy"   req -> get_jobs(JSON3.read(req.body, String), s.queue)
-    @get  "/jobs/queue"  req -> get_queue(req, s.queue, s.server.scheduler)
+    @get  "/jobs/queue"  req -> get_queue(s.queue, s.server.scheduler)
     # abort job, will cancel job from internal queue and also the external scheduler eg slurm
     @post "/abort/"       req -> abort(req, s.queue, s.server.scheduler)
 end

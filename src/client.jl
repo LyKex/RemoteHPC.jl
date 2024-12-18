@@ -260,9 +260,12 @@ function load(s::Server, state::JobState)
     return JSON3.read(resp.body, Vector{String})
 end
 
-function queue(s::Server)
-    resp = HTTP.get(s, URI(path="/job/queue"))
-    return JSON3.read(resp.body, Vector{String})
+function queue(s::Server; io=stdout)
+    resp = HTTP.get(s, URI(path="/jobs/queue"))
+    strings = JSON3.read(resp.body, Vector{String})
+    println(io, "$(strings[3]) scheduler on server $(s.name)")
+    println(io, "Jobs running: $(strings[1])")
+    println(io, "Jobs pending: $(strings[2])")
 end
 
 running(s::Server) = load(s, Running)
