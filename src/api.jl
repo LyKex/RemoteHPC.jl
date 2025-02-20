@@ -96,25 +96,40 @@ end
 function submit_job(req, queue::Queue, channel)
     p = queryparams(req)
     jdir = p["path"]
+    @debugv 0 "Submitting job: $jdir" logtype=RuntimeLog
+    
     lock(queue) do q
         if !haskey(q.full_queue, jdir)
             error("No Job is present at $jdir.")
         else
+            @debugv 0 "Found in full_queue, state: $(q.full_queue[jdir].state)" logtype=RuntimeLog
             q.full_queue[jdir].state = Submitted
         end
     end
+    
     priority = haskey(p, "priority") ? parse(Int, p["priority"]) : DEFAULT_PRIORITY
     put!(channel, jdir => (priority, -time()))
+    @debugv 0 "Added to submit_channel" logtype=RuntimeLog
 end 
         
 function get_job(req::HTTP.Request, queue::Queue)
     p = queryparams(req)
     job_dir = p["path"]
+    @debugv 0 "Getting job info for: $job_dir" logtype=RuntimeLog
+    
+    # Check queue state
     info = get(queue.info.current_queue, job_dir, nothing)
     if info === nothing
         info = get(queue.info.full_queue, job_dir, nothing)
     end
+    
+    @debugv 0 "Queue state for job: $(info === nothing ? "not found" : info.state)" logtype=RuntimeLog
+    
     info = info === nothing ? Job(-1, Unknown) : info
+    
+    # Log queue sizes
+    @debugv 0 "Queue sizes - full: $(length(queue.info.full_queue)), current: $(length(queue.info.current_queue))" logtype=RuntimeLog
+    
     tquery = HTTP.queryparams(URI(req.target))
     if isempty(tquery) || !haskey(tquery, "data")
         return [info,
@@ -180,14 +195,31 @@ function save_job(req::HTTP.Request, args...)
 end
 
 function save_job(dir::AbstractString, job_info::Tuple, queue::Queue, sched::Scheduler)
-    # Needs to be done so the inputs `dir` also changes.
+    @debugv 0 "Saving job to directory: $dir" logtype=RuntimeLog
     mkpath(dir)
+    
+    # Write job.sh
     open(joinpath(dir, "job.sh"), "w") do f
-        return write(f, job_info, sched)
+        write(f, job_info, sched)
     end
+    
+    # Write job info
     JSON3.write(joinpath(dir, ".remotehpc_info"), job_info)
+    
+    # Update queue state
     lock(queue) do q
-        return q.full_queue[dir] = Job(-1, Saved)
+        @debugv 0 "Adding job to full_queue with state Saved" logtype=RuntimeLog
+        q.full_queue[dir] = Job(-1, Saved)
+        @debugv 0 "Current full_queue size: $(length(q.full_queue))" logtype=RuntimeLog
+    end
+    
+    # Force write queue state
+    try
+        JSON3.write(config_path("jobs", "queue.json"), queue.info)
+        @debugv 0 "Successfully wrote queue.json" logtype=RuntimeLog
+    catch e
+        @debugv 0 "Failed to write queue.json: $(sprint(showerror, e))" logtype=RuntimeLog
+        rethrow(e)
     end
 end
 
@@ -230,13 +262,36 @@ function priority!(req::HTTP.Request, queue::Queue)
     end
 end
 
+function get_queue(queue::Queue, scheduler::Scheduler)
+    return  (
+        string(length(queue.info.full_queue)),
+        string(length(queue.info.current_queue)),
+        string(length(queue.info.submit_queue)),
+        scheduler.type
+    )
+end
+
 function setup_job_api!(s::ServerData)
+    @debugv 0 "Setting up job API endpoints" logtype=RuntimeLog
+    
     # write job.sh and .remotehpcinfo
-    # note that to write actual calculation inputs this function need to be override
-    # also add job into s.queue, the job directory will serve as job id
-    @post "/job/"         req -> save_job(req, s.queue, s.server.scheduler)
+    @post "/job/" req -> begin
+        @debugv 0 "POST /job/ endpoint called" logtype=RuntimeLog
+        save_job(req, s.queue, s.server.scheduler)
+    end
+    
     # submit job only if the job is in queue
-    @put  "/job/"         req -> submit_job(req, s.queue, s.submit_channel)
+    @put "/job/" req -> begin
+        @debugv 0 "PUT /job/ endpoint called" logtype=RuntimeLog
+        try
+            submit_job(req, s.queue, s.submit_channel)
+            @debugv 0 "submit_job completed successfully" logtype=RuntimeLog
+        catch e
+            @debugv 0 "submit_job failed: $(sprint(showerror, e))" logtype=RuntimeLog
+            rethrow(e)
+        end
+    end
+    
     # update job priority
     @put  "/job/priority" req -> priority!(req, s.queue)
     # query job based on job directory
@@ -246,7 +301,7 @@ function setup_job_api!(s::ServerData)
     @get  "/jobs/state"   req -> get_jobs(JSON3.read(req.body, JobState), s.queue)
     # query jobs based on Job directory
     @get  "/jobs/fuzzy"   req -> get_jobs(JSON3.read(req.body, String), s.queue)
-    @get  "/jobs/queue"  req -> queue(s.server.scheduler)
+    @get  "/jobs/queue"  req -> get_queue(s.queue, s.server.scheduler)
     # abort job, will cancel job from internal queue and also the external scheduler eg slurm
     @post "/abort/"       req -> abort(req, s.queue, s.server.scheduler)
 end

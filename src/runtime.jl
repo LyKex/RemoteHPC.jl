@@ -27,6 +27,19 @@ function Base.lock(f::Function, q::Queue)
     end
 end
 
+"""
+
+Read queue from queue.json stored in RemoteHPC config. Useful for when restarting server.
+"""
+function read_queue()
+    qfile = config_path("jobs", "queue.json")
+    tq = JSON3.read(read(qfile, String))
+    full_queue = StructTypes.constructfrom(Dict{String,Job}, tq[:full_queue])
+    current_queue = StructTypes.constructfrom(Dict{String, Job}, tq[:current_queue])
+    # submit_queue = StructTypes.constructfrom(Dict{String, Job}, tq[:submit_queue])
+    return (;full_queue, current_queue)
+end
+    
 function Base.fill!(qu::Queue, scheduler::Scheduler, init)
     qfile = config_path("jobs", "queue.json")
     if init
@@ -77,6 +90,7 @@ function Base.fill!(qu::Queue, scheduler::Scheduler, init)
             end
         end
     else
+    # updating queue
         squeue = queue(scheduler)
         lock(qu) do q
             for (d, i) in q.current_queue
@@ -121,10 +135,11 @@ const SLEEP_TIME = Ref(5.0)
 
 function main_loop(s::ServerData)
     fill!(s.queue, s.server.scheduler, true)
-    # Used to identify if multiple servers are running in order to selfdestruct 
-    # log_mtimes = mtime.(joinpath.((config_path("logs/runtimes/"),), readdir(config_path("logs/runtimes/"))))
-    t = Threads.@spawn while !s.stop
+    
+    # Queue update task
+    t_writequeue = Threads.@spawn while !s.stop
         try
+            @debugv 3 "Running queue update task" logtype=RuntimeLog
             fill!(s.queue, s.server.scheduler, false)
             JSON3.write(config_path("jobs", "queue.json"), s.queue.info)
         catch e
@@ -132,29 +147,33 @@ function main_loop(s::ServerData)
         end
         sleep(s.sleep_time)
     end
-    Threads.@spawn while !s.stop
+    
+    # Job submission handling task
+    t_submit = Threads.@spawn while !s.stop
         try
+            @debugv 3 "Running job submission task" logtype=RuntimeLog
             handle_job_submission!(s)
         catch e
             log_error(e, logtype = RuntimeLog)
         end
         sleep(s.sleep_time)
     end
+    
     while !s.stop
-        # monitor_issues(log_mtimes)
         try
             log_info(s)
         catch e
             log_error(e, logtype = RuntimeLog)
         end
-        # TODO when will this file be created?
         if ispath(config_path("self_destruct"))
-            @debug "self_destruct found, self destructing..."
+            @debug "self_destruct found, self destructing..." logtype=RuntimeLog
             exit()
         end
         sleep(s.sleep_time)
     end
-    fetch(t)
+    
+    fetch(t_writequeue)
+    fetch(t_submit)  # Make sure we wait for the submission handler to finish
     return JSON3.write(config_path("jobs", "queue.json"), s.queue.info)
 end
 
@@ -168,7 +187,7 @@ function log_info(s::ServerData)
     s.requests_per_second = curreq / dt
     s.total_requests += curreq
     
-    @debugv 0 "current_queue: $(length(s.queue.info.current_queue)) - submit_queue: $(length(s.queue.info.submit_queue))" logtype=RuntimeLog
+    # @debugv 0 "current_queue: $(length(s.queue.info.current_queue)) - submit_queue: $(length(s.queue.info.submit_queue))" logtype=RuntimeLog
     @debugv 0 "total requests: $(s.total_requests) - r/s: $(s.requests_per_second)" logtype=RESTLog 
 end
 
@@ -188,45 +207,40 @@ function monitor_issues(log_mtimes)
 end
 
 function handle_job_submission!(s::ServerData)
-    @debugv 2 "Submitting jobs" logtype=RuntimeLog
-    to_submit = s.queue.info.submit_queue
-    njobs = length(s.queue.info.current_queue)
+    @debugv 2 "Handling job submissions" logtype=RuntimeLog
+    
+    # Process channel items
     while !isempty(s.submit_channel)
-        jobdir,priority = take!(s.submit_channel)
-        to_submit[jobdir] = priority
+        jobdir, priority = take!(s.submit_channel)
+        @debugv 0 "Moving from channel to submit_queue: $jobdir" logtype=RuntimeLog
+        s.queue.info.submit_queue[jobdir] = priority
     end
-    n_submit = min(s.server.max_concurrent_jobs - njobs, length(to_submit))
+    
+    # Try to submit jobs
+    n_submit = min(s.server.max_concurrent_jobs - length(s.queue.info.current_queue), 
+                  length(s.queue.info.submit_queue))
+    
     submitted = 0
     for i in 1:n_submit
-        job_dir, priority = dequeue_pair!(to_submit)
-        if ispath(job_dir)
-            curtries = 0
-            while -1 < curtries < 3
-                try
-                    id = submit(s.server.scheduler, job_dir)
-                    @debugv 2 "Submitting Job: $(id)@$(job_dir)" logtype=RuntimeLog
-                    lock(s.queue) do q
-                        return q.current_queue[job_dir] = Job(id, Pending)
-                    end
-                    curtries = -1
-                    submitted += 1
-                catch e
-                    curtries += 1
-                    sleep(s.sleep_time)
-                    lock(s.queue) do q
-                        q.full_queue[job_dir] = Job(-1, SubmissionError)
-                    end
-                    
-                    with_logger(FileLogger(joinpath(job_dir, "submission.err"), append=true)) do
-                        log_error(e)
-                    end
-                end
+        job_dir, priority = dequeue_pair!(s.queue.info.submit_queue)
+        @debugv 0 "Attempting to submit: $job_dir" logtype=RuntimeLog
+        
+        if !ispath(job_dir)
+            @warnv 0 "Directory not found: $job_dir" logtype=RuntimeLog
+            continue
+        end
+        
+        try
+            id = submit(s.server.scheduler, job_dir)
+            lock(s.queue) do q
+                q.current_queue[job_dir] = Job(id, Pending)
+                delete!(q.full_queue, job_dir)
             end
-            if curtries != -1
-                to_submit[job_dir] = (priority[1] - 1, priority[2])
-            end
-        else
-            @warnv 2 "Submission job at dir: $job_dir is not a directory." logtype=RuntimeLog
+            @debugv 0 "Successfully submitted: $job_dir (ID: $id)" logtype=RuntimeLog
+            submitted += 1
+        catch e
+            @warnv 0 "Submission failed for $job_dir: $(sprint(showerror, e))" logtype=RuntimeLog
+            s.queue.info.submit_queue[job_dir] = (priority[1] - 1, priority[2])
         end
     end
     @debugv 2 "Submitted $submitted jobs" logtype=RuntimeLog
@@ -364,7 +378,8 @@ end
 
 
 """
-Check if the ssh port forwarding tunnel to server s is still alive.
+    $(SIGNATURES)
+Check if the ssh port forwarding tunnel to server s is still alive using command `nc`.
 """
 function check_tunnel(s::Server)
     check_tunnel(s.port)

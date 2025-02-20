@@ -268,13 +268,17 @@ Show queue information on server.
 function queue(s::Server; io=stdout)
     sched_type = s.scheduler.type
     resp = HTTP.get(s, URI(path="/jobs/queue"))
-    q = JSON3.read(resp.body, Dict{AbstractString, Tuple{Int64, JobState}})
+    q = JSON3.read(resp.body, Vector{String})
         
-    pendings = sum([v[2] == JobState(1) for v in values(q)])
-    runnings = sum([v[2] == JobState(2) for v in values(q)])
+    # pendings = sum([v[2] == JobState(1) for v in values(q)])
+    # runnings = sum([v[2] == JobState(2) for v in values(q)])
+    full = parse(Int, q[1])
+    runnings = parse(Int, q[2])
+    submits = parse(Int, q[3])
     println(io, "$(sched_type) scheduler on server $(s.name)")
+    println(io, "Total jobs: $(full)")
     println(io, "Jobs running: $(runnings)")
-    println(io, "Jobs pending: $(pendings)")
+    println(io, "Jobs submitted: $(submits)")
 end
 
 running(s::Server) = load(s, Running)
