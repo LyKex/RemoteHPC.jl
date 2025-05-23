@@ -501,7 +501,7 @@ function julia_main(;verbose=0, kwargs...)::Cint
                 @debug "Shutting down server"
                 terminate()
                 fetch(t)
-                # fetch(connection_task)
+                fetch(connection_task)
                 return 0
             catch e
                 log_error(e)

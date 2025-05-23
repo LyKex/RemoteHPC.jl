@@ -141,7 +141,9 @@ function start(s::Server; verbosity=0)
             LOCAL_SERVER[] = local_server()
             
         else
+            # NOTE local port will be changed here and save to config file
             check_connections(; names=[s.name])
+            s = load(s)
             while !isalive(s) && retries < 60
                 retries += 1
                 sleep(0.1)
@@ -219,8 +221,12 @@ Check if the port of the ssh tunnel to the server is listening.
 """
 function islistening(s::Server)
     cmd = pipeline(pipeline(`echo -e '\x1dclose\x0d'`, `telnet localhost $(s.port)`); stdout=devnull)
-    p = run(cmd)
-    return iszero(p.processes[2].exitcode)
+    try
+        p = run(cmd)
+        return iszero(p.processes[2].exitcode)
+    catch
+        return false
+    end
 end
 
 
