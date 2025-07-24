@@ -4,8 +4,11 @@ mutable struct Job
 end
 
 Base.@kwdef mutable struct QueueInfo
+    # all jobs not being handled by scheduler (completed, to submit, failed)
     full_queue::Dict{String,Job} = Dict{String,Job}()
+    # being handled by scheduler (pending, running, completing... see `in_queue`)
     current_queue::Dict{String,Job} = Dict{String,Job}()
+    # submitted but not running
     submit_queue::PriorityQueue{String, Tuple{Int, Float64}} = PriorityQueue{String, Tuple{Int, Float64}}(Base.Order.Reverse)
 end
 StructTypes.StructType(::Type{QueueInfo}) = StructTypes.Mutable()
@@ -29,45 +32,42 @@ end
 
 """
 
-Read queue from queue.json stored in RemoteHPC config. Useful for when restarting server.
+Read queue from queue.json stored in RemoteHPC config and update Queue.
 """
-function read_queue()
+function read_queue!(qu::Queue)
     qfile = config_path("jobs", "queue.json")
-    tq = JSON3.read(read(qfile, String))
-    full_queue = StructTypes.constructfrom(Dict{String,Job}, tq[:full_queue])
-    current_queue = StructTypes.constructfrom(Dict{String, Job}, tq[:current_queue])
-    # submit_queue = StructTypes.constructfrom(Dict{String, Job}, tq[:submit_queue])
-    return (;full_queue, current_queue)
-end
-    
-function Base.fill!(qu::Queue, scheduler::Scheduler, init)
-    qfile = config_path("jobs", "queue.json")
-    if init
-        if ispath(qfile)
-            t = read(qfile)
-            if !isempty(t)
-                # TODO: should be deprecated
-                tq = JSON3.read(t)
-                lock(qu) do q
-                    q.full_queue = StructTypes.constructfrom(Dict{String,Job}, tq[:full_queue])
-                    q.current_queue = StructTypes.constructfrom(Dict{String, Job}, tq[:current_queue])
-                    if tq[:submit_queue] isa AbstractArray
-                        for jdir in tq[:submit_queue]
-                            q.submit_queue[jdir] = DEFAULT_PRIORITY
-                            q.full_queue[jdir].state = Submitted
-                        end
-                    else
-                        for (jdir, priority) in tq[:submit_queue]
-                            if length(priority) > 1
-                                q.submit_queue[string(jdir)] = (priority...,)
-                            else
-                                q.submit_queue[string(jdir)] = (priority, -time())
-                            end
+
+    if ispath(qfile)
+        t = read(qfile)
+        if !isempty(t)
+            # TODO: should be deprecated
+            tq = JSON3.read(t)
+            lock(qu) do q
+                q.full_queue = StructTypes.constructfrom(Dict{String,Job}, tq[:full_queue])
+                q.current_queue = StructTypes.constructfrom(Dict{String, Job}, tq[:current_queue])
+                if tq[:submit_queue] isa AbstractArray
+                    for jdir in tq[:submit_queue]
+                        q.submit_queue[jdir] = DEFAULT_PRIORITY
+                        q.full_queue[jdir].state = Submitted
+                    end
+                else
+                    for (jdir, priority) in tq[:submit_queue]
+                        if length(priority) > 1
+                            q.submit_queue[string(jdir)] = (priority...,)
+                        else
+                            q.submit_queue[string(jdir)] = (priority, -time())
                         end
                     end
                 end
             end
         end
+    end
+
+end
+    
+function Base.fill!(qu::Queue, scheduler::Scheduler, init)
+    if init
+        read_queue!(qu)
     end
     lock(qu) do q
         for q_ in (q.full_queue, q.current_queue)
@@ -90,13 +90,16 @@ function Base.fill!(qu::Queue, scheduler::Scheduler, init)
             end
         end
     else
-    # updating queue
+        # updating queue
+        # jobs being handled by scheduler (see `in_queue`)
         squeue = queue(scheduler)
         lock(qu) do q
             for (d, i) in q.current_queue
                 if haskey(squeue, d)
+                    # running, submitted,...
                     state = pop!(squeue, d)[2]
                 else
+                    # failed, compelted...
                     state = jobstate(scheduler, i.id)
                 end
                 if in_queue(state)
