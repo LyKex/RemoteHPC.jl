@@ -88,11 +88,11 @@ function start(s::Server; verbosity=0)
         firstime = checktime()
         @debug "server startup: last modified time of config file $(checktime())"
 
-        p = "$(conf_path)/$hostname/logs/errors.log"
+        error_log = "$(conf_path)/$hostname/logs/errors.log"
         scrpt = "using RemoteHPC; RemoteHPC.julia_main(verbose=$(verbosity))"
         
         if s.domain != "localhost"
-            julia_cmd = replace("""export OPENBLAS_NUM_THREADS=1; $(s.julia_exec) --project=$(conf_path) --startup-file=no -t 10 -e "using RemoteHPC; RemoteHPC.julia_main(verbose=$(verbosity))" 2&>1 $p""",
+            julia_cmd = replace("""export OPENBLAS_NUM_THREADS=1; $(s.julia_exec) --project=$(conf_path) --startup-file=no -t 10 -e "using RemoteHPC; RemoteHPC.julia_main(verbose=$(verbosity))" 2&>1 $error_log""",
                                 "'" => "")
             if Sys.which("ssh") === nothing
                 OpenSSH_jll.ssh() do ssh_exec

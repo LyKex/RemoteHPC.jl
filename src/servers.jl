@@ -565,6 +565,9 @@ function Base.rm(s::Server)
            rm(joinpath(SERVER_DIR, s.name * ".json"))
 end
 
+"""
+find the ssh process connecting to the server s, return its pid.
+"""
 function find_tunnel(s)
     if haskey(ENV, "USER")
         lines = readlines(`ps -o pid,command -u $(ENV["USER"])`)
@@ -658,12 +661,20 @@ Pushes the `local_file` to the `server_file` on the server.
 """
 function push(filename::String, server::Server, server_file::String)
     if islocal(server)
-        cp(filename, server_file; force = true)
+        # this cannot handle sym link correctly
+        # i.e. if the server file already exists and is a symlink, `cp` will error
+        # cp(filename, server_file; force = true)
+        out = Pipe()
+        err = Pipe()
+        run(pipeline(`rsync -a $filename $server_file`;
+             stdout = out, stderr=err))
+        close(out.in)
+        close(err.in)
     else
         out = Pipe()
         err = Pipe()
         # OpenSSH_jll.scp() do scp_exec
-            run(pipeline(`scp $filename $(ssh_string(server) * ":" * server_file)`;
+            run(pipeline(`rsync -a $filename $(ssh_string(server) * ":" * server_file)`;
                      stdout = out, stderr=err))
         # end
         close(out.in)
