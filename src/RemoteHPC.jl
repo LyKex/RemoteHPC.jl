@@ -70,7 +70,8 @@ include("io.jl")
 end
 
 
-export Server, start, restart, local_server, isalive, load, save, submit, abort, state, configure, priority!, check_connections
+export Server, start, restart, local_server, isalive, load, save, submit, abort, abortall, state,
+    configure, priority!, check_connections
 export Calculation, Environment, Exec, HQ, Slurm, Bash
 export check_tunnels, exec, queue
 
