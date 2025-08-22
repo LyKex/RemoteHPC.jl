@@ -104,7 +104,7 @@ function start(s::Server; verbosity=0)
         else
             e = s.julia_exec * " --project=$(conf_path)"
             julia_cmd = Cmd([string.(split(e))..., "--startup-file=no", "-t", "auto", "-e",
-                             scrpt, "&>", p, "&"])
+                             scrpt, "&>", error_log, "&"])
             run(Cmd(julia_cmd; detach = true); wait = false)
         end
 
@@ -310,6 +310,13 @@ function abort(s::Server, dir::AbstractString)
         @debug "Aborted job with id $id."
     else
         return resp
+    end
+end
+
+function abortall(s::Server)
+    dirs = load(s, Running)
+    for d in dirs
+        abort(s, d)
     end
 end
 
