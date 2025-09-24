@@ -314,7 +314,7 @@ function abort(s::Server, dir::AbstractString)
 end
 
 function abortall(s::Server)
-    dirs = load(s, Running)
+    dirs = vcat(load(s, Running), load(s, Submitted))
     for d in dirs
         abort(s, d)
     end
