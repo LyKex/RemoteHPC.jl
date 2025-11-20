@@ -62,6 +62,7 @@ for sched in scheds
             st = RemoteHPC.load_config(s)
             @test st.scheduler == sched
         end
+
         @testset "database" begin
             exec = RemoteHPC.Exec("test", "cat",
                                   Dict("f" => 3, "test" => [1, 2, 3],
@@ -99,6 +100,7 @@ for sched in scheds
             es = load(s, Exec(; path = ""))
             @test length(es) == 1
         end
+
         @testset "job" begin
             @testset "creation and save" begin
                 exec = load(s, Exec("test"))

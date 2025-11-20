@@ -129,7 +129,11 @@ function submit(::Bash, j::AbstractString)
 end
 
 function abort(::Bash, id::Int)
-    pids = [parse(Int, split(s)[1]) for s in readlines(`ps -s $id`)[2:end]]
+    if Sys.islinux()
+        pids = [parse(Int, split(s)[1]) for s in readlines(`ps -s $id`)[2:end]]
+    elseif Sys.isapple()
+        pids = [parse(Int, split(s)[1]) for s in readlines(`ps -p $id -o pgid=`)]
+    end
     for p in pids
         run(ignorestatus(`kill $p`))
     end
