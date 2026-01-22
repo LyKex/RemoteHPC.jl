@@ -25,6 +25,7 @@ function Base.lock(f::Function, q::Queue)
         f(q.info)
     catch e
         log_error(e, logtype=RuntimeLog)
+        rethrow(e)
     finally
         unlock(q.lock)
     end
@@ -93,19 +94,24 @@ function Base.fill!(qu::Queue, scheduler::Scheduler, init)
         # updating queue
         # jobs being handled by scheduler (see `in_queue`)
         squeue = queue(scheduler)
+        @debug "fill!: squeue returned $(length(squeue)) jobs, current_queue has $(length(qu.info.current_queue)) jobs" logtype=RuntimeLog
         lock(qu) do q
             for (d, i) in q.current_queue
                 if haskey(squeue, d)
                     # running, submitted,...
                     state = pop!(squeue, d)[2]
+                    @debug "fill!: job $d (id=$(i.id)) found in squeue with state=$state" logtype=RuntimeLog
                 else
-                    # failed, compelted...
+                    # failed, completed...
+                    @debug "fill!: job $d (id=$(i.id)) NOT in squeue, querying jobstate" logtype=RuntimeLog
                     state = jobstate(scheduler, i.id)
+                    @debug "fill!: jobstate returned $state for job $d (id=$(i.id))" logtype=RuntimeLog
                 end
                 if in_queue(state)
                     delete!(q.full_queue, d)
                     q.current_queue[d] = Job(i.id, state)
                 else
+                    @debug "fill!: moving job $d from current_queue to full_queue with state=$state" logtype=RuntimeLog
                     delete!(q.current_queue, d)
                     q.full_queue[d] = Job(i.id, state)
                 end

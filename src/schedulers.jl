@@ -158,68 +158,90 @@ end
 
 function queue(sc::Slurm)
     qlines = readlines(`squeue -u $(ENV["USER"]) --format="%Z %i %T"`)[2:end]
-    return Dict([(s = split(x); s[1] => (parse(Int, s[2]), jobstate(sc, s[3])))
-                 for x in qlines])
+    result = Dict{String, Tuple{Int, JobState}}()
+    for x in qlines
+        parts = split(x)
+        if length(parts) >= 3
+            dir = parts[1]
+            id = parse(Int, parts[2])
+            state = jobstate(sc, parts[3])
+            result[dir] = (id, state)
+            @debug "squeue: dir=$dir, id=$id, state=$state" logtype=RuntimeLog
+        end
+    end
+    return result
 end
 
 function jobstate(s::Slurm, id::Int)
-    cmd = `sacct -u $(ENV["USER"]) --format=State -j $id -P`
+    cmd = `sacct -u $(ENV["USER"]) --format=State -j $id -P -n`
     st = Unknown
     try
         lines = readlines(cmd)
-        if length(lines) > 1
-            st = jobstate(s, lines[2])
+        @debug "sacct output for job $id: $lines" logtype=RuntimeLog
+        if !isempty(lines)
+            # Take first non-empty state (job state, not step states)
+            state_str = strip(first(lines))
+            st = jobstate(s, state_str)
+            @debug "Parsed state for job $id: $st (from '$state_str')" logtype=RuntimeLog
         end
-    catch
-        nothing
+    catch e
+        @debug "sacct failed for job $id: $e" logtype=RuntimeLog
     end
     st != Unknown && return st
 
     cmd = `scontrol show job $id`
     try
-        lines = read(cmd, String)
+        output = read(cmd, String)
         reg = r"JobState=(\w+)\b"
-        m = match(reg, lines)
-        return jobstate(s, m[1])
-    catch
-        return Unknown
+        m = match(reg, output)
+        if m !== nothing
+            st = jobstate(s, m[1])
+            @debug "scontrol state for job $id: $st (from '$(m[1])')" logtype=RuntimeLog
+            return st
+        end
+    catch e
+        @debug "scontrol failed for job $id: $e" logtype=RuntimeLog
     end
+    @debug "Could not determine state for job $id, returning Unknown" logtype=RuntimeLog
+    return Unknown
 end
 
 function jobstate(::Slurm, state::AbstractString)
-    if state == "PENDING"
+    # SLURM states can have suffixes like "CANCELLED by 12345" or "COMPLETED+"
+    # Use startswith for robust matching
+    if startswith(state, "PENDING")
         return Pending
-    elseif state == "RUNNING"
+    elseif startswith(state, "RUNNING")
         return Running
-    elseif state == "COMPLETED"
+    elseif startswith(state, "COMPLETED")
         return Completed
-    elseif state == "CONFIGURING"
+    elseif startswith(state, "CONFIGURING")
         return Configuring
-    elseif state == "COMPLETING"
+    elseif startswith(state, "COMPLETING")
         return Completing
-    elseif state == "CANCELLED"
+    elseif startswith(state, "CANCELLED")
         return Cancelled
-    elseif state == "BOOT_FAIL"
+    elseif startswith(state, "BOOT_FAIL")
         return BootFail
-    elseif state == "DEADLINE"
+    elseif startswith(state, "DEADLINE")
         return Deadline
-    elseif state == "FAILED"
+    elseif startswith(state, "FAILED")
         return Failed
-    elseif state == "NODE_FAIL"
+    elseif startswith(state, "NODE_FAIL")
         return NodeFail
-    elseif state == "OUT_OF_MEMORY"
+    elseif startswith(state, "OUT_OF_MEMORY")
         return OutOfMemory
-    elseif state == "PREEMTED"
+    elseif startswith(state, "PREEMPTED")
         return Preempted
-    elseif state == "REQUEUED"
+    elseif startswith(state, "REQUEUED")
         return Requeued
-    elseif state == "RESIZING"
+    elseif startswith(state, "RESIZING")
         return Resizing
-    elseif state == "REVOKED"
+    elseif startswith(state, "REVOKED")
         return Revoked
-    elseif state == "SUSPENDED"
+    elseif startswith(state, "SUSPENDED")
         return Suspended
-    elseif state == "TIMEOUT"
+    elseif startswith(state, "TIMEOUT")
         return Timeout
     end
     return Unknown
