@@ -171,3 +171,5 @@ end
         RemoteHPC.push!(s, "test")
     end
 end
+
+include("e2e_remote.jl")

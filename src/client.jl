@@ -103,9 +103,8 @@ function start(s::Server; verbosity=0)
             end
         else
             e = s.julia_exec * " --project=$(conf_path)"
-            julia_cmd = Cmd([string.(split(e))..., "--startup-file=no", "-t", "auto", "-e",
-                             scrpt, "&>", error_log, "&"])
-            run(Cmd(julia_cmd; detach = true); wait = false)
+            julia_cmd = Cmd([string.(split(e))..., "--startup-file=no", "-t", "auto", "-e", scrpt])
+            run(pipeline(Cmd(julia_cmd; detach=true); stdout=error_log, stderr=error_log); wait=false)
         end
 
         retries = 0

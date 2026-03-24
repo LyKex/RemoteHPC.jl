@@ -55,6 +55,7 @@ end
 function setup_core_api!(s::ServerData)
     # POSIX-like commands
     @get  "/ispath/"     req -> (p = queryparams(req)["path"]; ispath(p))
+    @get  "/isdir/"      req -> (p = queryparams(req)["path"]; isdir(p))
     @get  "/read/"       req -> (p = queryparams(req)["path"]; read(p))
     @post "/write/"      req -> (p = queryparams(req)["path"]; write(p, req.body))
     @post "/rm/"         req -> (p = queryparams(req)["path"]; rm(p; recursive = true))

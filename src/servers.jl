@@ -136,7 +136,13 @@ function configure!(s::Server; interactive = true)
                 s.julia_exec = julia
             end
         else
-            s.julia_exec = "julia"
+            # Non-interactive: verify julia is reachable, install if not
+            res = server_command(s, "which $(s.julia_exec)")
+            if res.exitcode != 0
+                s.julia_exec = install_julia(s)
+            else
+                s.julia_exec = strip(res.stdout)
+            end
         end
     end
 
@@ -218,38 +224,29 @@ function local_server()
     return load(s)
 end
 
-# TODO use versions.json from main julia site
 function install_julia(s::Server)
-    
-    julia_tar = "julia-1.8.5-linux-x86_64.tar.gz"
-    
     title = "Installing julia on Server $(s.name) ($(s.username)@$(s.domain))..."
-    steps = ["downloading locally",
-             "pushing to remote",
-             "unpacking on remote"]
-             
+    steps = ["installing juliaup",
+             "adding latest stable julia"]
+
     StepSpinner(title, steps) do spinner
-        t = tempname()
-        mkdir(t)
-        download("https://julialang-s3.julialang.org/bin/linux/x64/1.8/julia-1.8.5-linux-x86_64.tar.gz",
-             joinpath(t, "julia.tar.gz"))
-             
-        next!(spinner)
-        
-        push(joinpath(t, "julia.tar.gz"), s, julia_tar)
-        
-        rm(t; recursive = true)
-        
-        next!(spinner)
-        
-        res = server_command(s, "tar -xf $julia_tar")
+        # Official non-interactive juliaup install (--yes skips confirmation prompts)
+        res = server_command(s, "curl -fsSL https://install.julialang.org | sh -s -- --yes")
         if res.exitcode != 0
-            finish!(spinner, ErrorException("Issue unpacking julia executable on cluster, please install julia manually"))
+            finish!(spinner, ErrorException("Failed to install juliaup:\n$(res.stderr)"))
         end
-        server_command(s, "rm $julia_tar")
-        s.julia_exec = "~/julia-1.8.5/bin/julia"
+        next!(spinner)
+
+        # Ensure the release channel is present
+        res = server_command(s, "~/.juliaup/bin/juliaup add release")
+        if res.exitcode != 0
+            finish!(spinner, ErrorException("Failed to add Julia release channel:\n$(res.stderr)"))
+        end
+
+        julia_exec = "~/.juliaup/bin/julia"
+        s.julia_exec = julia_exec
         save(s)
-        return s.julia_exec
+        return julia_exec
     end
 end
 
@@ -279,6 +276,39 @@ function install(s::Server, julia_exec = s.julia_exec)
         save(s)
     end
     @info "RemoteHPC installed on remote cluster, try starting the server with `start(server)`."
+end
+
+"""
+    install_latest(s::Server)
+
+Like [`install`](@ref), but installs RemoteHPC from the dev git branch
+(`git@github.com:LyKex/RemoteHPC.jl.git#dev`) instead of the registry.
+Use this when testing unreleased changes.
+"""
+function install_latest(s::Server, julia_exec = s.julia_exec)
+    title = "Installing RemoteHPC (dev) on remote"
+    steps = ["installing julia",
+             "installing RemoteHPC from git"]
+
+    StepSpinner(title, steps) do spinner
+        res = server_command(s, "which $julia_exec")
+        if res.exitcode != 0
+            julia_exec = install_julia(s)
+        else
+            julia_exec = res.stdout[1:end-1]
+        end
+        next!(spinner)
+
+        s.julia_exec = julia_exec
+        res = julia_cmd(s, "using Pkg; Pkg.activate(joinpath(Pkg.depots()[1], \"config/RemoteHPC\")); Pkg.add(url=\"git@github.com:LyKex/RemoteHPC.jl.git\", rev=\"dev\"); Pkg.build(\"RemoteHPC\")")
+
+        if res.exitcode != 0
+            finish!(spinner, ErrorException("Something went wrong installing RemoteHPC (dev) on server:\n$(res.stderr)"))
+        end
+
+        save(s)
+    end
+    @info "RemoteHPC (dev) installed on remote cluster, try starting the server with `start(server)`."
 end
 
 mutable struct StepSpinner
@@ -431,6 +461,11 @@ Base.joinpath(s::Server, p...) = joinpath(s.jobdir, p...)
 function Base.ispath(s::Server, p...)
     return islocal(s) ? ispath(p...) :
            JSON3.read(HTTP.get(s, URI(path="/ispath/", query=Dict("path"=> joinpath(p...)))).body, Bool)
+end
+
+function Base.isdir(s::Server, p::String)
+    return islocal(s) ? isdir(p) :
+           JSON3.read(HTTP.get(s, URI(path="/isdir/", query=Dict("path" => p))).body, Bool)
 end
 
 function Base.symlink(s::Server, p, p2)
@@ -620,6 +655,14 @@ function construct_tunnel(s, remote_port)
     end 
 end
 
+const RSYNC_AVAILABLE = Ref{Union{Bool,Nothing}}(nothing)
+function _check_rsync()
+    if RSYNC_AVAILABLE[] === nothing
+        RSYNC_AVAILABLE[] = Sys.which("rsync") !== nothing
+    end
+    RSYNC_AVAILABLE[] || error("rsync not found. Install rsync to transfer large files or directories.")
+end
+
 """
     pull(server::Server, remote::String, loc::String)
 
@@ -633,23 +676,19 @@ function pull(server::Server, remote::String, loc::String)
     if islocal(server)
         cp(remote, path; force = true)
     else
+        # large file uses rsync, small file use HTTP (over ssh)
         if filesize(server, remote) > 100e6 || isdir(server, remote)
+            _check_rsync()
             out = Pipe()
             err = Pipe()
-            # OpenSSH_jll.scp() do scp_exec
-                run(pipeline(`scp -r $(ssh_string(server) * ":" * remote) $path`; stdout = out,
-                             stderr = err))
-            # end
+            run(pipeline(`rsync -a $(ssh_string(server)):$remote $path`; stdout=out, stderr=err))
             close(out.in)
             close(err.in)
-            stderr = read(err, String)
-            if !isempty(stderr)
-                error("$stderr")
-            end
+            stderr_str = read(err, String)
+            isempty(stderr_str) || error(stderr_str)
         else
             write(path, read(server, remote))
         end
-            
     end
     return path
 end
@@ -661,24 +700,25 @@ Pushes the `local_file` to the `server_file` on the server.
 """
 function push(filename::String, server::Server, server_file::String)
     if islocal(server)
-        # this cannot handle sym link correctly
-        # i.e. if the server file already exists and is a symlink, `cp` will error
-        # cp(filename, server_file; force = true)
+        _check_rsync()
         out = Pipe()
         err = Pipe()
-        run(pipeline(`rsync -a $filename $server_file`;
-             stdout = out, stderr=err))
+        run(pipeline(`rsync -a $filename $server_file`; stdout=out, stderr=err))
         close(out.in)
         close(err.in)
+        stderr_str = read(err, String)
+        isempty(stderr_str) || error(stderr_str)
+    elseif !isdir(filename) && filesize(filename) <= 100e6 && isalive(server)
+        write(server, server_file, read(filename))
     else
+        _check_rsync()
         out = Pipe()
         err = Pipe()
-        # OpenSSH_jll.scp() do scp_exec
-            run(pipeline(`rsync -a $filename $(ssh_string(server) * ":" * server_file)`;
-                     stdout = out, stderr=err))
-        # end
+        run(pipeline(`rsync -a $filename $(ssh_string(server)):$server_file`; stdout=out, stderr=err))
         close(out.in)
         close(err.in)
+        stderr_str = read(err, String)
+        isempty(stderr_str) || error(stderr_str)
     end
 end
 
