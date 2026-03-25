@@ -33,7 +33,7 @@ function start(s::Server; verbosity=0)
         if alive
             push!(spinner, "Server is already up and running.")
             finish!(spinner)
-            return
+            return s
         end
 
         next!(spinner) # step 3

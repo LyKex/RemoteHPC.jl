@@ -56,4 +56,6 @@ function configure_local()
 end
 configure_local()
 Pkg.activate(CONFIG_DIR)
-Pkg.add(url="https://github.com/LyKex/RemoteHPC.jl")
+if !haskey(Pkg.project().dependencies, "RemoteHPC")
+    Pkg.add(url="https://github.com/LyKex/RemoteHPC.jl")
+end

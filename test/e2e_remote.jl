@@ -14,6 +14,7 @@
 if !isdefined(Main, :RemoteHPC)
     using Test
     using RemoteHPC
+    using RemoteHPC: push, pull
 end
 
 const E2E_HOST  = get(ENV, "REMOTEHPC_E2E_HOST",  "testserver")
@@ -62,7 +63,7 @@ else
         tdir = remote_tmpdir[]
 
         @testset "push/pull small file (HTTP)" begin
-            content = "hello from e2e test\n" * "x"^1000
+            content = "hello from e2e test\n" * "x"^1000 * "\n"
             local_src = tempname()
             write(local_src, content)
             remote_dst = "$tdir/small.txt"
