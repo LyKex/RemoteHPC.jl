@@ -14,7 +14,6 @@
 if !isdefined(Main, :RemoteHPC)
     using Test
     using RemoteHPC
-    using RemoteHPC: push, pull
 end
 
 const E2E_HOST  = get(ENV, "REMOTEHPC_E2E_HOST",  "testserver")
@@ -52,8 +51,10 @@ else
         @test remote !== nothing
         # Install from the dev branch so we test current changes, not the registry version
         RemoteHPC.install_latest(remote)
-        save(remote)
         remote = start(remote)
+        @info "remote server port: $(remote.port)"
+        remote = Server("e2e_remote")
+        @test remote.port != 8080
         @test isalive(remote)
         remote_tmpdir[] = strip(RemoteHPC.server_command(remote, "mktemp -d").stdout)
         @test !isempty(remote_tmpdir[])
@@ -61,6 +62,7 @@ else
 
     if isalive(remote)
         tdir = remote_tmpdir[]
+        remote = Server("e2e_remote")
 
         @testset "push/pull small file (HTTP)" begin
             content = "hello from e2e test\n" * "x"^1000 * "\n"

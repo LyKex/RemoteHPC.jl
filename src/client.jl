@@ -33,6 +33,9 @@ function start(s::Server; verbosity=0)
         if alive
             push!(spinner, "Server is already up and running.")
             finish!(spinner)
+            if !islocal(s)
+                s = load(s)
+            end
             return s
         end
 
