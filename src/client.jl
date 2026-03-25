@@ -67,9 +67,16 @@ function start(s::Server; verbosity=0)
             t = deepcopy(s)
             t.domain = "localhost"
             t.name = hostname
-            tf = tempname()
-            JSON3.write(tf, t)
-            push(tf, s, "$(conf_path)/$hostname/storage/servers/$hostname.json")
+            json_str = JSON3.write(t)
+            dest = "$(conf_path)/$hostname/storage/servers/$hostname.json"
+            server_command(s.username, s.domain, "mkdir -p $(dirname(dest))")
+            if Sys.which("ssh") === nothing
+                OpenSSH_jll.ssh() do ssh_exec
+                    run(pipeline(`$ssh_exec $(ssh_string(s)) "cat > '$dest'"`, stdin=IOBuffer(json_str)))
+                end
+            else
+                run(pipeline(`ssh $(ssh_string(s)) "cat > '$dest'"`, stdin=IOBuffer(json_str)))
+            end
         end
         
         # Here we check what the modify time of the server-side localhost file is.

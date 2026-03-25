@@ -33,6 +33,9 @@ else
 
 @testset "remote server e2e ($E2E_USER@$E2E_HOST)" begin
 
+    # local server must be alive before starting a remote server
+    start(local_server())
+
     remote = Server(;
         name       = "e2e_remote",
         username   = E2E_USER,

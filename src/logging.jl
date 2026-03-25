@@ -6,7 +6,7 @@ const LOGGING_DATE_FORMAT = "yyyy-mm-dd HH:MM:SS"
 function log_error(e; kwargs...)
     s = IOBuffer()
     showerror(s, e, catch_backtrace(); backtrace=true)
-    errormsg = String(resize!(s.data, s.size))
+    errormsg = String(take!(s))
     @error errormsg kwargs...
     return errormsg
 end
@@ -21,7 +21,7 @@ function TimestampLogger(logger)
         if haskey(log.kwargs, :exception)
             s = IOBuffer()
             showerror(s, log.kwargs[:exception]...; backtrace=true)
-            msg = String(resize!(s.data, s.size))
+            msg = String(take!(s))
         else
             msg = log.message
         end
